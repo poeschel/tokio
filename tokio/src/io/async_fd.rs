@@ -440,6 +440,31 @@ impl<T: AsRawFd> AsyncFd<T> {
         .into()
     }
 
+    pub fn poll_priority_ready<'a>(
+        &'a self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<AsyncFdReadyGuard<'a, T>>> {
+        let event = ready!(self.registration.poll_priority_ready(cx))?;
+
+        Ok(AsyncFdReadyGuard {
+            async_fd: self,
+            event: Some(event),
+        })
+        .into()
+    }
+
+    pub fn poll_priority_ready_mut<'a>(
+        &'a mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<AsyncFdReadyMutGuard<'a, T>>> {
+        let event = ready!(self.registration.poll_priority_ready(cx))?;
+
+        Ok(AsyncFdReadyMutGuard {
+            async_fd: self,
+            event: Some(event),
+        })
+        .into()
+    }
     async fn readiness(&self, interest: Interest) -> io::Result<AsyncFdReadyGuard<'_, T>> {
         let event = self.registration.readiness(interest).await?;
 
@@ -508,6 +533,11 @@ impl<T: AsRawFd> AsyncFd<T> {
     pub async fn writable_mut<'a>(&'a mut self) -> io::Result<AsyncFdReadyMutGuard<'a, T>> {
         self.readiness_mut(Interest::WRITABLE).await
     }
+
+    pub async fn priority_ready<'a>(&'a self) -> io::Result<AsyncFdReadyGuard<'a, T>> {
+        self.readiness(Interest::PRIORITY).await
+    }
+
 }
 
 impl<T: AsRawFd> AsRawFd for AsyncFd<T> {

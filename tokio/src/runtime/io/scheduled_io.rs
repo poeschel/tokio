@@ -46,6 +46,9 @@ struct Waiters {
 
     /// Waker used for AsyncWrite.
     writer: Option<Waker>,
+
+    // Waker used for Priority.
+    priority: Option<Waker>,
 }
 
 cfg_io_readiness! {
@@ -238,6 +241,12 @@ impl ScheduledIo {
             }
         }
 
+        if ready.is_priority() {
+            if let Some(waker) = waiters.priority.take() {
+                wakers.push(waker);
+            }
+        }
+
         #[cfg(feature = "net")]
         'outer: loop {
             let mut iter = waiters.list.drain_filter(|w| ready.satisfies(w.interest));
@@ -303,6 +312,7 @@ impl ScheduledIo {
             let slot = match direction {
                 Direction::Read => &mut waiters.reader,
                 Direction::Write => &mut waiters.writer,
+                Direction::Priority => &mut waiters.priority,
             };
 
             // Avoid cloning the waker if one is already stored that matches the
@@ -360,6 +370,7 @@ impl ScheduledIo {
         let mut waiters = self.waiters.lock();
         waiters.reader.take();
         waiters.writer.take();
+        waiters.priority.take();
     }
 }
 

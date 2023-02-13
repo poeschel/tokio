@@ -114,6 +114,10 @@ impl Registration {
         self.poll_ready(cx, Direction::Write)
     }
 
+    pub(crate) fn poll_priority_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<ReadyEvent>> {
+        self.poll_ready(cx, Direction::Priority)
+    }
+
     // Uses the poll path, requiring the caller to ensure mutual exclusion for
     // correctness. Only the last task to call this function is notified.
     #[cfg(not(tokio_wasi))]

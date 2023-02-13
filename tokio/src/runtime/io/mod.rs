@@ -72,6 +72,7 @@ struct IoDispatcher {
 enum Direction {
     Read,
     Write,
+    Priority,
 }
 
 enum Tick {
@@ -319,8 +320,9 @@ impl IoDispatcher {
 impl Direction {
     pub(super) fn mask(self) -> Ready {
         match self {
-            Direction::Read => Ready::READABLE | Ready::READ_CLOSED,
+            Direction::Read => Ready::READABLE | Ready::READ_CLOSED ,
             Direction::Write => Ready::WRITABLE | Ready::WRITE_CLOSED,
+            Direction::Priority => Ready::PRIORITY | Ready::READ_CLOSED,
         }
     }
 }
