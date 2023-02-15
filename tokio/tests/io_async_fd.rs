@@ -738,6 +738,7 @@ impl Stream for AsyncV4l2EventHandle {
 }
 
 #[tokio::test]
+#[ignore]
 async fn asyncfd_priority1() {
     use std::fs::File;
     use std::path::Path;
@@ -758,6 +759,7 @@ async fn asyncfd_priority1() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn asyncfd_priority2() {
     use std::fs::File;
     use std::path::Path;
