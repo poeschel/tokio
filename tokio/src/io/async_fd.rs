@@ -293,7 +293,8 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// Note that on multiple calls to [`poll_read_ready`] or
     /// [`poll_read_ready_mut`], only the `Waker` from the `Context` passed to the
     /// most recent call is scheduled to receive a wakeup. (However,
-    /// [`poll_write_ready`] retains a second, independent waker).
+    /// [`poll_write_ready`] and [`poll_priority_ready`] retain other, independent
+    /// wakers).
     ///
     /// This method is intended for cases where creating and pinning a future
     /// via [`readable`] is not feasible. Where possible, using [`readable`] is
@@ -371,7 +372,8 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// Note that on multiple calls to [`poll_write_ready`] or
     /// [`poll_write_ready_mut`], only the `Waker` from the `Context` passed to the
     /// most recent call is scheduled to receive a wakeup. (However,
-    /// [`poll_read_ready`] retains a second, independent waker).
+    /// [`poll_read_ready`] and [`poll_priority_ready`] retain other, independent
+    /// wakers).
     ///
     /// This method is intended for cases where creating and pinning a future
     /// via [`writable`] is not feasible. Where possible, using [`writable`] is
@@ -440,6 +442,36 @@ impl<T: AsRawFd> AsyncFd<T> {
         .into()
     }
 
+    /// Polls for priority readiness.
+    ///
+    /// If the file descriptor is not currently ready for taking a priority event,
+    /// this method will store a clone of the [`Waker`] from the provided
+    /// [`Context`]. When the file descriptor becomes ready to deliver a priority
+    /// event, [`Waker::wake`] will be called.
+    ///
+    /// Note that on multiple calls to [`poll_priority_ready`] or
+    /// [`poll_priority_ready_mut`], only the `Waker` from the `Context` passed to
+    /// the most recent call is scheduled to receive a wakeup. (However,
+    /// [`poll_read_ready`] and [`poll_write_ready`] retain other, independent
+    /// wakers).
+    ///
+    /// This method is intended for cases where creating and pinning a future
+    /// via [`priority_ready`] is not feasible. Where possible, using
+    /// [`priority_ready`] is preferred, as this supports polling from multiple
+    /// tasks at once.
+    ///
+    /// This method takes `&self`, so it is possible to call this method
+    /// concurrently with other methods on this struct. This method only
+    /// provides shared access to the inner IO resource when handling the
+    /// [`AsyncFdReadyGuard`].
+    ///
+    /// [`poll_read_ready`]: method@Self::poll_read_ready
+    /// [`poll_write_ready`]: method@Self::poll_write_ready
+    /// [`poll_write_ready_mut`]: method@Self::poll_write_ready_mut
+    /// [`priority_ready`]: method@Self::priority_ready
+    /// [`Context`]: struct@std::task::Context
+    /// [`Waker`]: struct@std::task::Waker
+    /// [`Waker::wake`]: method@std::task::Waker::wake
     pub fn poll_priority_ready<'a>(
         &'a self,
         cx: &mut Context<'_>,
@@ -453,6 +485,33 @@ impl<T: AsRawFd> AsyncFd<T> {
         .into()
     }
 
+    /// Polls for prioriity readiness.
+    ///
+    /// If the file descriptor is not currently ready for writing, this method
+    /// will store a clone of the [`Waker`] from the provided [`Context`]. When the
+    /// file descriptor becomes ready for writing, [`Waker::wake`] will be called.
+    ///
+    /// Note that on multiple calls to [`poll_write_ready`] or
+    /// [`poll_write_ready_mut`], only the `Waker` from the `Context` passed to the
+    /// most recent call is scheduled to receive a wakeup. (However,
+    /// [`poll_read_ready`] and [`poll_write_read`] retain other, independent
+    /// wakers).
+    ///
+    /// This method is intended for cases where creating and pinning a future
+    /// via [`priority_ready`] is not feasible. Where possible, using
+    /// [`priority_ready`] is preferred, as this supports polling from multiple tasks
+    /// at once.
+    ///
+    /// This method takes `&mut self`, so it is possible to access the inner IO
+    /// resource mutably when handling the [`AsyncFdReadyMutGuard`].
+    ///
+    /// [`poll_read_ready`]: method@Self::poll_read_ready
+    /// [`poll_write_ready`]: method@Self::poll_write_ready
+    /// [`poll_write_ready_mut`]: method@Self::poll_write_ready_mut
+    /// [`priority_ready`]: method@Self::priority_ready
+    /// [`Context`]: struct@std::task::Context
+    /// [`Waker`]: struct@std::task::Waker
+    /// [`Waker::wake`]: method@std::task::Waker::wake
     pub fn poll_priority_ready_mut<'a>(
         &'a mut self,
         cx: &mut Context<'_>,
@@ -534,6 +593,15 @@ impl<T: AsRawFd> AsyncFd<T> {
         self.readiness_mut(Interest::WRITABLE).await
     }
 
+    /// Waits for the file descriptor to have priority events ready, returning a
+    /// [`AsyncFdReadyGuard`] that must be dropped to resume priority-readiness
+    /// polling.
+    ///
+    /// This method takes `&self`, so it is possible to call this method
+    /// concurrently with other methods on this struct. This method only
+    /// provides shared access to the inner IO resource when handling the
+    /// [`AsyncFdReadyGuard`].
+    #[allow(clippy::needless_lifetimes)] // The lifetime improves rustdoc rendering.
     pub async fn priority_ready<'a>(&'a self) -> io::Result<AsyncFdReadyGuard<'a, T>> {
         self.readiness(Interest::PRIORITY).await
     }

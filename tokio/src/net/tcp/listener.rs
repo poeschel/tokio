@@ -168,6 +168,23 @@ impl TcpListener {
         Ok((stream, addr))
     }
 
+    /// Accepts a new incoming connection from this listener with the ability
+    /// to express an interest.
+    ///
+    /// This function does work similar to the [`accept`] function. It will
+    /// yield once a new TCP connection is established. When established, the
+    /// corresponding [`TcpStream`] and the remote peer's address will be returned.
+    /// The difference is, that the TcpStream does yield elements, that suffice
+    /// the interest you supplied with calling this function.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If the method is used as the event in a
+    /// [`tokio::select!`](crate::select) statement and some other branch
+    /// completes first, then it is guaranteed that no new connections were
+    /// accepted by this method.
+    ///
+    /// [`TcpStream`]: struct@crate::net::TcpStream
     pub async fn accept_with_interest(&self, interest: Interest) -> io::Result<(TcpStream, SocketAddr)> {
         let (mio, addr) = self
             .io
