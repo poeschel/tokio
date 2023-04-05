@@ -398,3 +398,61 @@ async fn write_closed() {
 
     assert!(!ready_event.is_write_closed());
 }
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn tcp_priority() {
+    use nix::sys::socket::{AddressFamily, connect, MsgFlags, send, socket, SockaddrIn, SockFlag, SockType};
+    use std::net::SocketAddr;
+
+    const DATA: &[u8] = b"this is some data to write to the socket";
+    const DATA2: &[u8] = b"1";
+
+    // Create listener
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+    // Create socket pair
+
+    let addr = listener.local_addr().unwrap();
+    let addr_l = match addr {
+        SocketAddr::V4(a) => SockaddrIn::from(a),
+        _ => panic!("Unexpected local address.")
+    };
+    let fd = socket(AddressFamily::Inet, SockType::Stream, SockFlag::empty(), None).unwrap();
+    connect(fd, &addr_l).expect("nix::sys::socket::connect");
+    let (server, _) = listener.accept_with_interest(Interest::PRIORITY).await.unwrap();
+    let written = DATA.to_vec();
+
+    // Track the server receiving data
+    let mut readable = task::spawn(server.ready(Interest::PRIORITY));
+    assert_pending!(readable.poll());
+
+    // Write data.
+    send(fd, &DATA2, MsgFlags::MSG_OOB).unwrap();
+
+    while !readable.is_woken() {
+        tokio::task::yield_now().await;
+    }
+    send(fd, &DATA, MsgFlags::empty()).unwrap();
+
+
+    {
+        // Drain the socket from the server end using non-vectored I/O
+        let mut read = vec![0; written.len()];
+        let mut i = 0;
+
+        while i < read.len() {
+            server.readable().await.unwrap();
+
+            match server.try_read(&mut read[i..]) {
+                Ok(n) => {
+                    i += n;
+                },
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => panic!("error = {:?}", e),
+            }
+        }
+
+        assert_eq!(read, written);
+    }
+}
