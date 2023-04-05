@@ -161,6 +161,11 @@ impl TcpStream {
         Ok(TcpStream { io })
     }
 
+    pub(crate) fn new_with_interest(connected: mio::net::TcpStream, interest: Interest) -> io::Result<TcpStream> {
+        let io = PollEvented::new_with_interest(connected, interest)?;
+        Ok(TcpStream { io })
+    }
+
     /// Creates new `TcpStream` from a `std::net::TcpStream`.
     ///
     /// This function is intended to be used to wrap a TCP stream from the

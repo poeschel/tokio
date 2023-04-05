@@ -168,6 +168,17 @@ impl TcpListener {
         Ok((stream, addr))
     }
 
+    pub async fn accept_with_interest(&self, interest: Interest) -> io::Result<(TcpStream, SocketAddr)> {
+        let (mio, addr) = self
+            .io
+            .registration()
+            .async_io(Interest::READABLE, || self.io.accept())
+            .await?;
+
+        let stream = TcpStream::new_with_interest(mio, interest)?;
+        Ok((stream, addr))
+    }
+
     /// Polls to accept a new incoming connection to this listener.
     ///
     /// If there is no connection to accept, `Poll::Pending` is returned and the
