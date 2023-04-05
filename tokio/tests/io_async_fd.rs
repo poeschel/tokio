@@ -20,6 +20,13 @@ use futures::poll;
 use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tokio_test::{assert_err, assert_pending};
 
+use futures::ready;
+use futures::stream::Stream;
+use std::pin::Pin;
+use std::task::Poll;
+use tokio::io::unix::TryIoError;
+use tokio::io::Interest;
+
 struct TestWaker {
     inner: Arc<TestWakerInner>,
     waker: Waker,
@@ -598,4 +605,198 @@ fn driver_shutdown_wakes_poll_race() {
         assert_err!(futures::executor::block_on(poll_readable(&afd_a)));
         assert_err!(futures::executor::block_on(poll_writable(&afd_a)));
     }
+}
+
+
+/// Device handle for low-level access.
+///
+/// Acquiring a handle facilitates (possibly mutating) interactions with the device.
+#[derive(Debug)]
+pub struct Handle {
+    fd: std::os::raw::c_int,
+}
+
+impl Handle {
+    fn new(fd: std::os::raw::c_int) -> Self {
+        Self { fd }
+    }
+
+    /// Returns the raw file descriptor
+    pub fn fd(&self) -> std::os::raw::c_int {
+        self.fd
+    }
+
+    /// Polls the file descriptor for I/O events
+    ///
+    /// # Arguments
+    ///
+    /// * `events`  - The events you are interested in (e.g. POLLIN)
+    ///
+    /// * `timeout` - Timeout in milliseconds
+    ///               A value of zero returns immedately, even if the fd is not ready.
+    ///               A negative value means infinite timeout (blocking).
+    pub fn poll(&self, events: i16, timeout: i32) -> io::Result<i32> {
+        match unsafe {
+            libc::poll(
+                [libc::pollfd {
+                    fd: self.fd,
+                    events,
+                    revents: 0,
+                }]
+                .as_mut_ptr(),
+                1,
+                timeout,
+            )
+        } {
+            -1 => Err(io::Error::last_os_error()),
+            ret => {
+                // A return value of zero means that we timed out. A positive value signifies the
+                // number of fds with non-zero revents fields (aka I/O activity).
+                assert!(ret == 0 || ret == 1);
+                Ok(ret)
+            }
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        let _ret: std::os::raw::c_int;
+        unsafe {
+            _ret = libc::close(self.fd);
+        }
+    }
+}
+
+impl AsRawFd for Handle {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+
+#[derive(Debug)]
+pub struct V4l2EventHandle {
+    handle: Handle
+}
+
+impl V4l2EventHandle {
+    pub fn get_event(&mut self) -> io::Result<i32> {
+        let res = self.handle.poll(libc::POLLPRI, -1)?;
+        Ok(res)
+    }
+}
+
+impl AsRawFd for V4l2EventHandle {
+    fn as_raw_fd(&self) -> RawFd {
+        self.handle.fd
+    }
+}
+
+pub struct AsyncV4l2EventHandle {
+    asyncfd: AsyncFd<V4l2EventHandle>
+}
+
+impl AsyncV4l2EventHandle {
+    pub fn new(handle: V4l2EventHandle) -> io::Result<AsyncV4l2EventHandle> {
+        /*
+        unsafe {
+            fd = handle.handle.fd;
+            let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+        */
+
+        Ok(AsyncV4l2EventHandle{
+            asyncfd: AsyncFd::with_interest(handle, Interest::PRIORITY)?
+        })
+    }
+}
+
+impl Stream for AsyncV4l2EventHandle {
+    type Item = io::Result<i32>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        loop {
+            let blah = self.asyncfd.poll_priority_ready_mut(cx);
+            let mut guard = ready!(blah)?;
+            let res = guard.try_io(|inner| inner.get_mut().get_event());
+            guard.clear_ready();
+            match res {
+                Err(TryIoError { .. }) => {
+                    continue;
+                },
+                Ok(Ok(event)) => {
+                    return Poll::Ready(Some(Ok(event)));
+                },
+                Ok(Err(err)) => {
+                    return Poll::Ready(Some(Err(err.into())));
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn asyncfd_priority1() {
+    use std::fs::File;
+    use std::path::Path;
+    use tokio_stream::StreamExt;
+
+    let file = File::open(Path::new("/sys/class/gpio/gpio1001/value")).unwrap();
+
+    let mut events = AsyncV4l2EventHandle::new(
+        V4l2EventHandle{
+            handle: Handle::new(file.as_raw_fd()),
+        }).unwrap();
+    loop { 
+        for e in events.next().await {
+            println!("v4l2 event:{:?}", e);
+        }
+    }
+
+}
+
+#[tokio::test]
+async fn asyncfd_priority2() {
+    use std::fs::File;
+    use std::path::Path;
+
+    let file = File::open(Path::new("/sys/class/gpio/gpio1001/value")).unwrap();
+    unsafe {
+        let fd = file.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
+    let asyncfd = AsyncFd::with_interest(file, Interest::PRIORITY).unwrap();
+
+    let readable = asyncfd.priority_ready();
+    tokio::pin!(readable);
+
+    let mut guard = readable.await.unwrap();
+
+    guard
+        .try_io(|_| asyncfd.get_ref().read(&mut [0]))
+        .unwrap()
+        .unwrap();
+
+    // `a` is not readable, but the reactor still thinks it is
+    // (because we have not observed a not-ready error yet)
+    asyncfd.priority_ready().await.unwrap().retain_ready();
+
+    // Explicitly clear the ready state
+    guard.clear_ready();
+
+    let readable = asyncfd.priority_ready();
+    tokio::pin!(readable);
+
+    tokio::select! {
+        _ = readable.as_mut() => panic!(),
+        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+    }
+
+    asyncfd.priority_ready().await.unwrap().retain_ready();
+
+    // Explicitly clear the ready state
+    guard.clear_ready();
 }
